@@ -1,4 +1,4 @@
-# STAT 518 Final Report <A Comparative Study on the Predictive Performance of Missing Data Imputation Methods: Simulation>
+# STAT 518 Final Report [A Comparative Study on the Predictive Performance of Missing Data Imputation Methods: Simulation]
 ## Introduction
 
 This repository contains the final report for STAT 518, exploring various imputation methods and their application in different datasets.
