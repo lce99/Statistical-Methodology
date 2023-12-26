@@ -1,0 +1,164 @@
+---
+title: "Final_Project"
+author: "2018150408 이충은"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Library import
+```{r}
+library(mixgb)
+library(mice)
+library(broom)
+library(xgboost)
+library(missForest)
+library(CALIBERrfimpute) 
+library(mgcv)
+library(randomForest)
+library(xgboost)
+library(Metrics)
+library(caret)
+library(e1071)
+```
+
+# Simulation data generation
+```{r}
+generate_data <- function(n = 10000) {
+  set.seed(123) # For reproducibility
+  
+  # Generating norm variables
+  norm1 <- rnorm(n)
+  norm2 <- rnorm(n) + 0.5 * norm1
+  norm3 <- rnorm(n) + 0.5 * norm1
+  norm4 <- rnorm(n) # Ancillary variable
+  norm5 <- rnorm(n)
+  norm6 <- rnorm(n) # Ancillary variable
+  norm7 <- rnorm(n)
+  norm8 <- rnorm(n) # Ancillary variable
+  
+  # Adjusting correlations with bin1 and ord1
+  bin1 <- rbinom(n, 1, 0.5)
+  ord1 <- rbinom(n, 2, 0.5)
+  
+  norm5 <- norm5 + 0.55 * bin1
+  norm6 <- norm6 + 0.55 * bin1 # Assuming correlation with bin1
+  norm7 <- norm7 + 0.65 * ord1
+  norm8 <- norm8 + 0.65 * ord1 # Assuming correlation with ord1
+  # Computing Y
+  Y <- norm1 + norm2 + norm3 + norm5 + norm7 +
+    (bin1 == 1) - (ord1 == 1) - 2 * (ord1 == 2) +
+    norm2 * norm3 - 3 * norm5 * (bin1 == 1) -
+    2 * norm7 * (ord1 == 1) + norm7 * (ord1 == 2) +
+    rnorm(n) # Adding a noise term
+  class_label <- ifelse(Y > mean(Y), 1, 0)
+  data <- data.frame(Y,norm1, norm2, norm3, norm4, norm5, norm6, norm7, norm8, bin1, ord1, class_label)
+  return(data)
+}
+data <- generate_data()
+```
+
+
+
+# Missing data and imputation
+```{r}
+introduce_missing_data <- function(data) {
+  set.seed(456) # For reproducibility
+  n <- nrow(data)
+  
+  for (i in 1:n) {
+    # Define Z variables
+    Zi <- data$Y[i] + data$norm4[i]
+    Zj <- data$Y[i] + data$norm6[i]
+    Zk <- data$Y[i] + data$norm8[i]
+    
+    # Introduce missingness based on conditions
+    if (Zi <= quantile(Zi, probs = 1/3)) {
+      if (runif(1) < 0.6) data$norm1[i] <- NA
+      if (runif(1) < 0.6) data$norm2[i] <- NA
+      if (runif(1) < 0.6) data$norm3[i] <- NA
+    } else if (Zi <= quantile(Zi, probs = 2/3)) {
+      if (runif(1) < 0.1) data$norm1[i] <- NA
+      if (runif(1) < 0.1) data$norm2[i] <- NA
+      if (runif(1) < 0.1) data$norm3[i] <- NA
+    } else {
+      if (runif(1) < 0.6) data$norm1[i] <- NA
+      if (runif(1) < 0.6) data$norm2[i] <- NA
+      if (runif(1) < 0.6) data$norm3[i] <- NA
+    }
+    
+    if (Zj <= quantile(Zj, probs = 1/3)) {
+      if (runif(1) < 0.6) data$norm5[i] <- NA
+      if (runif(1) < 0.6) data$bin1[i] <- NA
+    } else if (Zj <= quantile(Zj, probs = 2/3)) {
+      if (runif(1) < 0.1) data$norm5[i] <- NA
+      if (runif(1) < 0.1) data$bin1[i] <- NA
+    } else {
+      if (runif(1) < 0.6) data$norm5[i] <- NA
+      if (runif(1) < 0.6) data$bin1[i] <- NA
+    }
+    
+    if (Zk <= quantile(Zk, probs = 1/3)) {
+      if (runif(1) < 0.6) data$norm7[i] <- NA
+      if (runif(1) < 0.6) data$ord1[i] <- NA
+    } else if (Zk <= quantile(Zk, probs = 2/3)) {
+      if (runif(1) < 0.1) data$norm7[i] <- NA
+      if (runif(1) < 0.1) data$ord1[i] <- NA
+    } else {
+      if (runif(1) < 0.6) data$norm7[i] <- NA
+      if (runif(1) < 0.6) data$ord1[i] <- NA
+    }
+  }
+  
+  data
+}
+
+# Introducing missing data
+data_missing <- introduce_missing_data(data)
+data_with_missing <- data_missing[,c(-1,-5,-7,-9,-12)]
+mixgb_params <- list(max_depth = 3, eta = 0.3)
+calib_params <- c(rep('rfcont',5),rep('rfcat',2))
+# mixgb
+imputed_data_mixgb <- mixgb(data_with_missing, xgb.params = mixgb_params, m = 5, maxit = 1)
+
+# MissForest 
+data_with_missing_2 <- data_with_missing
+data_with_missing_2$bin1 <- as.factor(data_with_missing_2$bin1)
+data_with_missing_2$ord1 <- as.factor(data_with_missing_2$ord1)
+imputed_data_missforest <- missForest(data_with_missing_2)$ximp
+
+# Mice
+imputed_data_mice <- mice(data_with_missing_2, m = 5, maxit = 5)
+imputed_data_mice_c <- lapply(1:5, function(i) complete(imputed_data_mice, action = i))
+
+# Caliberrfimpute
+imputed_data_caliber <- mice(data_with_missing_2, method = calib_params, m = 5, maxit = 5)
+imputed_data_caliber_c <- lapply(1:5, function(i) complete(imputed_data_caliber, action = i))
+```
+
+# 예측
+```{r}
+train_y <- data_missing$Y
+c_train_y <- data_missing$class_label
+```
+
+```{r}
+# Exporting data_missing to CSV
+write.csv(data_missing, file = "data_missing.csv", row.names = FALSE)
+
+# Exporting imputed_data_mixgb to CSV
+write.csv(imputed_data_mixgb, file = "imputed_data_mixgb.csv", row.names = FALSE)
+
+# Exporting imputed_data_missforest to CSV
+write.csv(imputed_data_missforest, file = "imputed_data_missforest.csv", row.names = FALSE)
+
+# Exporting imputed_data_caliber_c to CSV
+write.csv(imputed_data_caliber_c, file = "imputed_data_caliber_c.csv", row.names = FALSE)
+
+# Exporting imputed_data_mice_c to CSV
+write.csv(imputed_data_mice_c, file = "imputed_data_mice_c.csv", row.names = FALSE)
+
+write.csv(data, file = 'data.csv', row.names = F)
+```

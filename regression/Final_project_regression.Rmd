@@ -1,0 +1,107 @@
+---
+title: "Untitled"
+author: "2018150408 이충은"
+date: "2023-12-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(mixgb)
+library(mice)
+library(broom)
+library(xgboost)
+library(missForest)
+library(CALIBERrfimpute) 
+library(mgcv)
+library(randomForest)
+library(xgboost)
+library(Metrics)
+library(caret)
+library(e1071)
+```
+
+```{r}
+bike <- readxl::read_excel('SeoulBikeData.xlsx')
+bike <- bike[,-1]
+```
+
+```{r}
+library(reshape)
+bike$Seasons <- as.factor(bike$Seasons)
+bike$Holiday <- as.factor(bike$Holiday)
+bike$Functioning_Day <- as.factor(bike$`Functioning_Day`)
+bike$Functioning_Day <- as.numeric(bike$Functioning_Day)
+bike$Holiday <- as.numeric(bike$Holiday)
+bike$Seasons <- as.numeric(bike$Seasons)
+```
+
+
+
+```{r}
+library(dplyr)
+
+# Normalize numeric variables
+numeric_vars <- c("Temperature","Humidity","Wind_speed","Visibility","Dew_point_temperature")
+
+bike_normalized <- bike %>%
+  mutate(across(all_of(numeric_vars), ~(. - min(.)) / (max(.) - min(.))))
+
+# Function to introduce MAR missingness
+introduce_mar_missing <- function(df, numeric_vars, missing_prob = 0.3) {
+  set.seed(123)
+  for (var in numeric_vars) {
+    # Randomly introduce missingness based on other variable values
+    df[[var]] <- ifelse(runif(nrow(df)) < missing_prob, NA, df[[var]])
+  }
+  df
+}
+
+# Apply the function to introduce missingness
+bike_mar_missing <- introduce_mar_missing(bike_normalized, numeric_vars)
+```
+
+```{r}
+bike_mar_missing<-bike_mar_missing[,-1]
+```
+
+
+
+```{r}
+mixgb_params <- list(max_depth = 3, eta = 0.3)
+calib_params <- c('rfcont')
+# mixgb
+imputed_data_mixgb <- mixgb(bike_mar_missing, xgb.params = mixgb_params, m = 5, maxit = 1)
+
+# MissForest 
+imputed_data_missforest <- mice(bike_mar_missing, m=5, maxit=5, method='rf')
+imputed_data_missforest <- lapply(1:5, function(i) complete(imputed_data_missforest, action = i))
+# Mice
+imputed_data_mice <- mice(bike_mar_missing, m = 5, maxit = 5)
+imputed_data_mice_c <- lapply(1:5, function(i) complete(imputed_data_mice, action = i))
+
+# Caliberrfimpute
+imputed_data_caliber <- mice(bike_mar_missing, method = calib_params, m = 5, maxit = 5)
+imputed_data_caliber_c <- lapply(1:5, function(i) complete(imputed_data_caliber, action = i))
+```
+```{r}
+# Exporting data_missing to CSV
+write.csv(bike_mar_missing, file = "data_missing.csv", row.names = FALSE)
+
+# Exporting imputed_data_mixgb to CSV
+write.csv(imputed_data_mixgb, file = "imputed_data_mixgb.csv", row.names = FALSE)
+
+# Exporting imputed_data_missforest to CSV
+write.csv(imputed_data_missforest, file = "imputed_data_missforest.csv", row.names = FALSE)
+
+# Exporting imputed_data_caliber_c to CSV
+write.csv(imputed_data_caliber_c, file = "imputed_data_caliber_c.csv", row.names = FALSE)
+
+# Exporting imputed_data_mice_c to CSV
+write.csv(imputed_data_mice_c, file = "imputed_data_mice_c.csv", row.names = FALSE)
+
+write.csv(bike_normalized, file = 'data.csv', row.names = F)
+```

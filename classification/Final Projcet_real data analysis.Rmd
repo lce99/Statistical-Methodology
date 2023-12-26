@@ -1,0 +1,118 @@
+---
+title: "Untitled"
+author: "2018150408 이충은"
+date: "2023-12-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Data import
+```{r}
+library(mixgb)
+library(mice)
+library(broom)
+library(xgboost)
+library(missForest)
+library(CALIBERrfimpute) 
+library(mgcv)
+library(randomForest)
+library(xgboost)
+library(Metrics)
+library(caret)
+library(e1071)
+```
+# Regression
+```{r}
+breast <- read.table('wdbc.data', sep = ',', header = FALSE)
+# make it binary
+breast <- breast[,1:10]
+breast$V2 <- ifelse(breast$V2 == 'M', 1, 0)
+```
+
+```{r}
+# Normalize the variables except the target variable (assuming target variable is 'V2')
+normalized_data <- as.data.frame(lapply(breast[, -which(names(breast) == "V2")], function(x) (x - min(x)) / (max(x) - min(x))))
+
+# Add the target variable back to the normalized dataset
+normalized_data$V2 <- breast$V2
+
+# Now, you can introduce missing values using your preferred method
+head(normalized_data)
+```
+
+```{r}
+set.seed(123)  # for reproducibility
+
+# Assuming 'normalized_data' is your normalized dataset
+# Define which variables the missingness depends on (excluding the target variable 'V2')
+dependent_vars <- c("V3", "V4", "V5", "V6")  # Specify the column names or indices
+normalized_data <- normalized_data[,-1]
+# Define the probability of missingness
+missing_prob <- 0.8
+missing_data <- normalized_data
+# Function to calculate missing probability based on other variables
+calculate_missing_prob <- function(row) {
+  # Calculate the mean of the dependent variables for this row
+  mean_values <- mean(row[dependent_vars])
+  # Scale the probability
+  scaled_prob <- missing_prob * mean_values
+  return(scaled_prob)
+}
+
+# Apply the function to each row
+prob_missing <- apply(missing_data, 1, calculate_missing_prob)
+
+# Introduce missing values based on the calculated probabilities
+for(i in 1:nrow(missing_data)) {
+  for(var in dependent_vars) {
+    if(runif(1) < prob_missing[i]) {
+      missing_data[i, var] <- NA
+    }
+  }
+}
+missing_data <- missing_data[,-9]
+# Your data now has missing values introduced based on the MAR method
+```
+
+```{r}
+missing_data
+```
+
+
+```{r}
+mixgb_params <- list(max_depth = 3, eta = 0.3)
+calib_params <- c('rfcont')
+# mixgb
+imputed_data_mixgb <- mixgb(missing_data, xgb.params = mixgb_params, m = 5, maxit = 1)
+
+# MissForest 
+imputed_data_missforest <- missForest(missing_data)$ximp
+
+# Mice
+imputed_data_mice <- mice(missing_data, m = 5, maxit = 5)
+imputed_data_mice_c <- lapply(1:5, function(i) complete(imputed_data_mice, action = i))
+
+# Caliberrfimpute
+imputed_data_caliber <- mice(missing_data, method = calib_params, m = 5, maxit = 5)
+imputed_data_caliber_c <- lapply(1:5, function(i) complete(imputed_data_caliber, action = i))
+```
+```{r}
+# Exporting data_missing to CSV
+write.csv(missing_data, file = "data_missing.csv", row.names = FALSE)
+
+# Exporting imputed_data_mixgb to CSV
+write.csv(imputed_data_mixgb, file = "imputed_data_mixgb.csv", row.names = FALSE)
+
+# Exporting imputed_data_missforest to CSV
+write.csv(imputed_data_missforest, file = "imputed_data_missforest.csv", row.names = FALSE)
+
+# Exporting imputed_data_caliber_c to CSV
+write.csv(imputed_data_caliber_c, file = "imputed_data_caliber_c.csv", row.names = FALSE)
+
+# Exporting imputed_data_mice_c to CSV
+write.csv(imputed_data_mice_c, file = "imputed_data_mice_c.csv", row.names = FALSE)
+
+write.csv(normalized_data, file = 'data.csv', row.names = F)
+```
